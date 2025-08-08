@@ -1,5 +1,6 @@
 import os
 import csv
+import json
 import time
 import requests
 from bs4 import BeautifulSoup
@@ -12,21 +13,22 @@ BASE_URL = "https://ratemyserver.net/index.php?page=mob_db&f=1&mlvsn=0&mlv=&mlv2
 output_dir = "monster_gifs"
 os.makedirs(output_dir, exist_ok=True)
 csv_file = "monsters.csv"
+json_file = "monsters.json"
 csv_data = []
 
 def make_silhouette_gif(input_path, output_path):
+    """Create a black silhouette version of an animated GIF while keeping transparency."""
     try:
         with Image.open(input_path) as img:
             frames = []
             durations = []
-            transparency_index = img.info.get("transparency", None)
 
             for frame in ImageSequence.Iterator(img):
-                # Convert to RGBA and composite over transparent background
+                # Flatten over a transparent background
                 rgba = Image.new("RGBA", img.size, (0, 0, 0, 0))
                 rgba.paste(frame.convert("RGBA"))
 
-                # Create black silhouette
+                # Turn any visible pixel to black (keep alpha)
                 pixels = rgba.load()
                 for y in range(rgba.height):
                     for x in range(rgba.width):
@@ -37,17 +39,11 @@ def make_silhouette_gif(input_path, output_path):
                 frames.append(rgba)
                 durations.append(frame.info.get("duration", 100))
 
-            # Convert all frames to P mode for GIF
-            palette_frames = []
-            for rgba in frames:
-                palette_frame = rgba.convert("P", dither=Image.NONE, palette=Image.ADAPTIVE, colors=255)
-                palette_frame.info["transparency"] = palette_frame.getpixel((0, 0))  # Assume corner is transparent
-                palette_frames.append(palette_frame)
-
-            palette_frames[0].save(
+            # Save as animated GIF
+            frames[0].save(
                 output_path,
                 save_all=True,
-                append_images=palette_frames[1:],
+                append_images=frames[1:],
                 loop=0,
                 duration=durations,
                 disposal=2
@@ -55,8 +51,8 @@ def make_silhouette_gif(input_path, output_path):
     except Exception as e:
         print(f"⚠️ Failed to create silhouette for {input_path}: {e}")
 
-
 def scrape_page(page_num):
+    """Fetch one page of monsters."""
     if page_num == 1:
         url = BASE_URL
     else:
@@ -88,7 +84,11 @@ while True:
 
             if name_tag and img_tag:
                 raw_text = name_tag.get_text(strip=True)
-                name = raw_text.split(" (")[0]
+
+                # Clean up spaces and split into array
+                name_text = raw_text.split(" (")[0].replace("\xa0", " ").strip()
+                name_list = [n.strip() for n in name_text.split(" / ")]
+
                 mob_id = raw_text.split("#")[-1]  # Extract ID from Mob-ID#1234
                 img_url = img_tag["src"]
                 filename = f"{mob_id}.gif"
@@ -96,17 +96,24 @@ while True:
                 path = os.path.join(output_dir, filename)
                 silhouette_path = os.path.join(output_dir, silhouette_filename)
 
-                print(f"🟢 {name} (ID {mob_id}) — {img_url}")
+                print(f"🟢 {', '.join(name_list)} (ID {mob_id}) — {img_url}")
 
-                # Save original GIF
-                img_data = requests.get(img_url).content
-                with open(path, "wb") as f:
-                    f.write(img_data)
+                # Download original GIF if missing
+                if not os.path.exists(path):
+                    img_data = requests.get(img_url).content
+                    with open(path, "wb") as f:
+                        f.write(img_data)
+                else:
+                    print(f"   ⏩ Skipping download, already exists: {filename}")
 
-                # Create silhouette GIF
-                make_silhouette_gif(path, silhouette_path)
+                # Create silhouette GIF if missing
+                if not os.path.exists(silhouette_path):
+                    make_silhouette_gif(path, silhouette_path)
+                else:
+                    print(f"   ⏩ Skipping silhouette, already exists: {silhouette_filename}")
 
-                csv_data.append([mob_id, name, img_url, path, silhouette_path])
+                # Store data
+                csv_data.append([mob_id, name_list, img_url, path, silhouette_path])
         except Exception as e:
             print(f"⚠️ Failed to parse monster block: {e}")
 
@@ -116,7 +123,22 @@ while True:
 # Save CSV
 with open(csv_file, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
-    writer.writerow(["Monster ID", "Monster Name", "Image URL", "Original Filename", "Silhouette Filename"])
+    writer.writerow(["Monster ID", "Monster Name(s)", "Image URL", "Original Filename", "Silhouette Filename"])
     writer.writerows(csv_data)
 
-print(f"\n📦 Finished scraping {len(csv_data)} monsters. Data saved to {csv_file}")
+# Save JSON
+json_data = []
+for row in csv_data:
+    mob_id, name_list, img_url, image_path, silhouette_path = row
+    json_data.append({
+        "name": name_list,
+        "image": image_path.replace("/", "\\"),
+        "silhouette": silhouette_path.replace("/", "\\")
+    })
+
+with open(json_file, "w", encoding="utf-8") as jf:
+    json.dump(json_data, jf, ensure_ascii=False, indent=2)
+
+print(f"\n📦 Finished scraping {len(csv_data)} monsters.")
+print(f"   CSV saved to {csv_file}")
+print(f"   JSON saved to {json_file}")
