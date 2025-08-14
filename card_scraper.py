@@ -2,44 +2,18 @@ import os
 import re
 import csv
 import json
+import time
 import requests
 import html
 from bs4 import BeautifulSoup
 
-BASE_URL = "https://ratemyserver.net/index.php?page=item_db&itype=6&iclass=0&tabj=on&iju=-1&iname=&idesc=&iscript=&islot_sign=-1&islot=-1&icfix=&i_ele=-1&i_status=-1&i_race=-1&i_bonus=-1&hnd=1&hns=1&sort_r=0&sort_o=0&isearch=Search"
+BASE_URL = "https://ratemyserver.net/index.php?page=item_db&itype=6&iclass=0&tabj=on&iju=-1&iname=&idesc=&iscript=&islot_sign=-1&islot=-1&icfix=&i_ele=-1&i_status=-1&i_race=-1&i_bonus=-1&hnd=1&hns=1&sort_r=0&sort_o=0&isearch=Search&page_num={}"
 IMAGE_DIR = "monster_cards"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
     "Referer": "https://ratemyserver.net/"
 }
-
-"""
-# Fetch the page
-response = requests.get(BASE_URL, headers=HEADERS)
-print("HTTP status code:", response.status_code)
-
-# Save the full HTML for inspection
-with open("debug_page.html", "w", encoding="utf-8") as f:
-    f.write(response.text)
-print("Saved full HTML to debug_page.html")
-
-# Parse HTML with BeautifulSoup
-soup = BeautifulSoup(response.text, "html.parser")
-
-# Find all table elements
-tables = soup.find_all("table")
-print(f"Found {len(tables)} table(s) on the page.\n")
-
-# Print class and first 500 chars of each table for inspection
-for i, table in enumerate(tables, start=1):
-    table_class = table.get("class")
-    table_html_preview = str(table)[:500].replace("\n", " ")
-    print(f"Table {i}: class={table_class}, preview={table_html_preview}\n")
-"""
-
-
-
 
 def scrape_from_url(url):
     resp = requests.get(url, headers=HEADERS)
@@ -49,13 +23,13 @@ def scrape_from_url(url):
     tables = soup.find_all("table", class_="content_box_m")
     data = []
 
-    for table in tables:
+    for idx, table in enumerate(tables, start=1):
         try:
             title_tr = table.find("tr", class_="lmd")
             if not title_tr:
                 continue
 
-						# --- Large image ---
+            # --- Large image ---
             img_tag = title_tr.find("img")
             large_img_url = None
             if img_tag and "onmouseover" in img_tag.attrs:
@@ -64,8 +38,6 @@ def scrape_from_url(url):
                 match = re.search(r"(https://file5s\.ratemyserver\.net/items/large/\d+\.gif)", decoded)
                 if match:
                     large_img_url = match.group(1)
-            print("Large image URL:", large_img_url)
-                    
 
             # --- Item name, category, ID ---
             title_div = title_tr.find("div", style=lambda v: v and "padding-left" in v)
@@ -99,9 +71,12 @@ def scrape_from_url(url):
                         br.replace_with("\n")
                     description = desc_td.get_text("\n", strip=True)
 
-						# --- Download image ---
+            # --- Download image ---
             if large_img_url:
                 save_image(large_img_url, os.path.join(IMAGE_DIR, f"{item_id}.gif"))
+
+            # Progress message
+            print(f"🟢 Retrieved: {item_name} (ID: {item_id})")
 
             data.append({
                 "item_name": item_name,
@@ -137,7 +112,22 @@ def save_to_csv(data, filename="cards.csv"):
         writer.writerows(data)
 
 if __name__ == "__main__":
-    results = scrape_from_url(BASE_URL)
-    save_to_json(results)
-    save_to_csv(results)
-    print(f"Scraped {len(results)} items and saved to cards.json, cards.csv, and {IMAGE_DIR}/")
+    all_results = []
+    page = 1
+
+    while True:
+        url = BASE_URL.format(page)
+        print(f"📖 Fetching page {page}...")
+        page_results = scrape_from_url(url)
+
+        if not page_results:
+            print("No more items found. Stopping.")
+            break
+
+        all_results.extend(page_results)
+        page += 1
+        time.sleep(2)  # Delay between requests
+
+    save_to_json(all_results)
+    save_to_csv(all_results)
+    print(f"🔥 Found {len(all_results)} total items and saved to cards.json, cards.csv, and downloaded images to {IMAGE_DIR}/")
